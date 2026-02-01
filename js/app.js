@@ -135,10 +135,14 @@ clearBtn.addEventListener('click', () => {
 // Analyze Documents using Tesseract.js OCR (No API needed!)
 async function analyzeDocuments(images) {
     let fullAnalysis = '';
+    let allExtractedText = ''; // Combine all text from all documents
+    let documentsList = '';
+    let patientNames = []; // Store all patient names found
     
+    // Extract text from all documents
     for (let i = 0; i < images.length; i++) {
         const img = images[i];
-        fullAnalysis += `\n## Документ ${i + 1}: ${img.name}\n\n`;
+        documentsList += `${i + 1}. ${img.name}\n`;
         
         try {
             // Use Tesseract.js to extract text from image
@@ -150,16 +154,80 @@ async function analyzeDocuments(images) {
                 }
             );
             
-            // Analyze the extracted text
-            const analysis = analyzeMedicalDocument(text, img.name);
-            fullAnalysis += analysis;
+            allExtractedText += `\n--- Документ ${i + 1}: ${img.name} ---\n${text}\n`;
+            
+            // Extract patient name from this document
+            const patientName = extractPatientName(text);
+            if (patientName) {
+                patientNames.push(patientName);
+            }
             
         } catch (error) {
-            fullAnalysis += `**Ошибка**: Не удалось обработать этот документ. ${error.message}\n\n`;
+            documentsList += `   ⚠️ Ошибка обработки\n`;
         }
     }
     
+    // Check if all documents belong to the same patient
+    const uniqueNames = [...new Set(patientNames)];
+    const isSamePatient = uniqueNames.length <= 1;
+    const patientName = uniqueNames.length > 0 ? uniqueNames[0] : 'Не указано';
+    
+    // Header - Show patient identification
+    fullAnalysis += `# 👤 Проверка Пациента\n\n`;
+    
+    if (isSamePatient && patientName !== 'Не указано') {
+        fullAnalysis += `✅ **Все документы принадлежат одному пациенту**\n\n`;
+        fullAnalysis += `**Имя пациента**: ${patientName}\n`;
+        fullAnalysis += `**Количество документов**: ${images.length}\n\n`;
+    } else if (uniqueNames.length > 1) {
+        fullAnalysis += `⚠️ **ВНИМАНИЕ**: Обнаружены документы разных пациентов!\n\n`;
+        fullAnalysis += `**Найденные имена**:\n`;
+        uniqueNames.forEach(name => {
+            fullAnalysis += `- ${name}\n`;
+        });
+        fullAnalysis += `\n**Пожалуйста, загрузите документы только одного пациента.**\n\n`;
+    } else {
+        fullAnalysis += `⚠️ **Имя пациента не найдено в документах**\n\n`;
+        fullAnalysis += `**Количество документов**: ${images.length}\n\n`;
+    }
+    
+    fullAnalysis += `---\n\n`;
+    
+    // Analyze ALL documents together as one patient's records
+    const combinedAnalysis = analyzeMedicalDocument(allExtractedText, patientName, images.length);
+    fullAnalysis += combinedAnalysis;
+    
     return fullAnalysis;
+}
+
+// Extract patient name from document text
+function extractPatientName(text) {
+    const lines = text.split('\n');
+    
+    // Look for patterns like "Пациент: Name" or "Patient: Name"
+    for (let line of lines) {
+        const lowerLine = line.toLowerCase();
+        
+        // Russian pattern
+        if (lowerLine.includes('пациент:') || lowerLine.includes('пациент :')) {
+            const match = line.match(/пациент[:\s]+([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)/i);
+            if (match) return match[1].trim();
+        }
+        
+        // English pattern
+        if (lowerLine.includes('patient:') || lowerLine.includes('patient :')) {
+            const match = line.match(/patient[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+            if (match) return match[1].trim();
+        }
+        
+        // Name pattern (Cyrillic full name)
+        const nameMatch = line.match(/([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+)/);
+        if (nameMatch && line.length < 100) { // Likely a name if short line
+            return nameMatch[1].trim();
+        }
+    }
+    
+    return null;
 }
 
 // Get medical recommendations based on document content
@@ -296,42 +364,33 @@ function getScoreDetails(score) {
 }
 
 // Analyze medical document text
-function analyzeMedicalDocument(text, filename) {
+function analyzeMedicalDocument(text, patientName, documentCount) {
     const lowerText = text.toLowerCase();
     let analysis = '';
     
-    // Detect document type
-    analysis += '**Тип Документа**: ';
-    if (lowerText.includes('prescription') || lowerText.includes('rx') || lowerText.includes('рецепт')) {
-        analysis += 'Рецепт\n\n';
-    } else if (lowerText.includes('consultation') || lowerText.includes('консультация')) {
-        analysis += 'Медицинская Консультация\n\n';
-    } else if (lowerText.includes('lab') || lowerText.includes('test') || lowerText.includes('анализ')) {
-        analysis += 'Результаты Лабораторных Анализов\n\n';
-    } else if (lowerText.includes('discharge') || lowerText.includes('выписка')) {
-        analysis += 'Выписка\n\n';
-    } else {
-        analysis += 'Медицинский Документ\n\n';
-    }
+    // Simple, clear header
+    analysis += `# 📋 Анализ Документов\n\n`;
+    analysis += `Проверяем документы пациента: **${patientName}**\n\n`;
+    analysis += `Всего документов: **${documentCount}**\n\n`;
+    analysis += `---\n\n`;
     
-    // Extract key information
-    analysis += '**Извлеченный Текст**:\n```\n' + text.substring(0, 500) + (text.length > 500 ? '...\n```\n\n' : '\n```\n\n');
-    
-    // Check for required fields
-    analysis += '**Проверка Полноты Документа**:\n\n';
+    // Check for required fields with SIMPLE language
+    analysis += `## ✅ Что Есть в Документах:\n\n`;
     
     const requiredFields = [
-        { name: 'Имя Пациента', keywords: ['name', 'patient', 'имя', 'пациент'], found: false },
-        { name: 'Дата', keywords: ['date', 'дата', '202', '201'], found: false },
-        { name: 'Врач', keywords: ['doctor', 'dr.', 'physician', 'врач', 'доктор'], found: false },
-        { name: 'Диагноз', keywords: ['diagnosis', 'диагноз', 'condition'], found: false },
-        { name: 'Подпись', keywords: ['signature', 'signed', 'подпись'], found: false }
+        { name: '👤 Имя пациента', keywords: ['name', 'patient', 'имя', 'пациент'], found: false },
+        { name: '📅 Дата приема', keywords: ['date', 'дата', '202', '201'], found: false },
+        { name: '👨‍⚕️ Имя врача', keywords: ['doctor', 'dr.', 'physician', 'врач', 'доктор'], found: false },
+        { name: '🏥 Диагноз', keywords: ['diagnosis', 'диагноз', 'condition', 'жалоб'], found: false },
+        { name: '✍️ Подпись врача', keywords: ['signature', 'signed', 'подпись'], found: false }
     ];
     
     requiredFields.forEach(field => {
         field.found = field.keywords.some(keyword => lowerText.includes(keyword));
-        analysis += `- ${field.found ? '✅' : '❌'} ${field.name}: ${field.found ? 'Присутствует' : 'Отсутствует или неясно'}\n`;
+        analysis += `${field.found ? '✅' : '❌'} ${field.name}\n`;
     });
+    
+    analysis += `\n---\n\n`;
     
     // Calculate accuracy score
     const accuracyScore = calculateAccuracyScore(text, requiredFields);
@@ -348,18 +407,21 @@ function analyzeMedicalDocument(text, filename) {
     analysis += `- 🎯 Медицинская Терминология: ${lowerText.includes('диагноз') || lowerText.includes('diagnosis') ? 'Присутствует' : 'Ограничена'}\n`;
     analysis += `- ✒️ Аутентификация: ${lowerText.includes('подпись') || lowerText.includes('signature') ? 'Подпись Обнаружена' : 'Подпись Не Обнаружена'}\n`;
     
-    analysis += '\n**Что Нужно Добавить**:\n\n';
+    analysis += '\n**📝 Что Отсутствует в Документах Пациента**:\n\n';
     const missingFields = requiredFields.filter(f => !f.found);
     if (missingFields.length > 0) {
+        analysis += '**В документах не хватает:**\n\n';
         missingFields.forEach(field => {
-            analysis += `- Добавьте четкое ${field.name}\n`;
+            analysis += `- ❌ ${field.name} - попросите врача добавить эту информацию\n`;
         });
+        analysis += '\n💡 **Совет**: Обратитесь к врачу, чтобы дополнить документы недостающей информацией.\n';
     } else {
-        analysis += '- Документ содержит все основные обязательные поля\n';
+        analysis += '✅ **Отлично!** Все важные поля присутствуют в документах пациента!\n';
     }
     
     // Medical recommendations based on content
-    analysis += '\n**Рекомендуемые Дополнительные Обследования для Пациента**:\n\n';
+    analysis += '\n**🩺 Какие Анализы и Обследования Нужно Сделать Пациенту**:\n\n';
+    analysis += '*На основе информации в документах, пациенту рекомендуется:*\n\n';
     
     const medicalRecommendations = getMedicalRecommendations(lowerText);
     if (medicalRecommendations.length > 0) {
@@ -377,20 +439,20 @@ function analyzeMedicalDocument(text, filename) {
     analysis += '- Подтвердите, что вся медицинская терминология написана правильно\n';
     analysis += '- Проверьте, что подписи и печати присутствуют там, где требуется\n';
     
-    // Professional recommendations based on score
-    analysis += '\n**💡 Профессиональные Рекомендации**:\n\n';
+    // Professional recommendations based on score - CLEARER FOR PATIENT
+    analysis += '\n**💡 Общая Оценка Документов Пациента**:\n\n';
     if (accuracyScore >= 90) {
-        analysis += '✅ Отличная работа! Документ соответствует профессиональным стандартам. Минимальные улучшения могут потребоваться.\n';
+        analysis += '✅ **Отлично!** Документы пациента очень хорошо оформлены и содержат всю необходимую информацию.\n';
     } else if (accuracyScore >= 80) {
-        analysis += '👍 Очень хорошо! Документ почти завершен. Просмотрите небольшие улучшения ниже.\n';
+        analysis += '👍 **Очень хорошо!** Документы почти полные. Есть небольшие недостатки (см. выше).\n';
     } else if (accuracyScore >= 70) {
-        analysis += '📝 Хорошая работа. Документ функционален, но может быть улучшен для повышения профессионализма.\n';
+        analysis += '📝 **Хорошо.** Документы содержат основную информацию, но можно улучшить (см. что отсутствует выше).\n';
     } else if (accuracyScore >= 60) {
-        analysis += '⚠️ Удовлетворительно. Документ нуждается в улучшениях для соответствия стандартам.\n';
+        analysis += '⚠️ **Удовлетворительно.** В документах не хватает некоторой важной информации. Обратитесь к врачу.\n';
     } else if (accuracyScore >= 50) {
-        analysis += '🚧 Требует улучшений. Несколько важных элементов отсутствуют или неполны.\n';
+        analysis += '🚧 **Требует улучшений.** Многие важные поля отсутствуют. Попросите врача дополнить документы.\n';
     } else {
-        analysis += '❌ Неудовлетворительно. Документ требует значительной доработки для соответствия медицинским стандартам.\n';
+        analysis += '❌ **Недостаточно информации.** Документы неполные. Необходимо получить полные медицинские документы от врача.\n';
     }
     
     analysis += '\n---\n';
