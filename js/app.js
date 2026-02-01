@@ -263,52 +263,65 @@ async function analyzeDocuments(images) {
     
     fullAnalysis += `---\n\n`;
     
-    // STEP 2: Check if all documents belong to same patient
-    fullAnalysis += `# 👤 Проверка Пациента\n\n`;
-    
-    const patientNames = allDocuments
-        .map(doc => doc.patient)
-        .filter(name => name !== null);
-    
-    const normalizedNames = patientNames.map(name => name.trim().toLowerCase());
-    const uniqueNames = [...new Set(normalizedNames)];
-    
-    if (uniqueNames.length === 1 && patientNames.length > 0) {
-        fullAnalysis += `✅ **Все документы принадлежат одному пациенту**\n\n`;
-        fullAnalysis += `**Имя пациента**: ${patientNames[0]}\n`;
-        fullAnalysis += `**Количество документов**: ${images.length}\n\n`;
-    } else if (uniqueNames.length > 1) {
-        fullAnalysis += `⚠️ **ВНИМАНИЕ: Обнаружены документы разных пациентов!**\n\n`;
-        const originalUniqueNames = [...new Set(patientNames)];
-        originalUniqueNames.forEach(name => {
-            fullAnalysis += `- ${name}\n`;
-        });
-        fullAnalysis += `\n`;
-    } else {
-        fullAnalysis += `⚠️ **Имя пациента не найдено в документах**\n\n`;
-    }
-    
-    fullAnalysis += `---\n\n`;
-    
-    // STEP 3: Check Clinical Guidelines
-    fullAnalysis += `# 📚 Проверка Клинических Рекомендаций\n\n`;
+    // STEP 2: Group documents by patient
+    const patientGroups = {};
     
     for (const doc of allDocuments) {
-        fullAnalysis += `### Документ ${doc.number}: ${doc.name}\n`;
-        const guidelines = checkClinicalGuidelines(doc.text, doc.type);
-        guidelines.forEach(guideline => {
-            fullAnalysis += `${guideline}\n`;
-        });
-        fullAnalysis += `\n`;
+        const patientName = doc.patient || 'Неизвестный Пациент';
+        const normalizedName = patientName.trim().toLowerCase();
+        
+        if (!patientGroups[normalizedName]) {
+            patientGroups[normalizedName] = {
+                originalName: patientName,
+                documents: []
+            };
+        }
+        patientGroups[normalizedName].documents.push(doc);
     }
     
-    fullAnalysis += `---\n\n`;
+    const patientCount = Object.keys(patientGroups).length;
     
-    // STEP 4: Comprehensive Analysis for the Patient
-    let allExtractedText = allDocuments.map(doc => doc.text).join('\n\n');
-    const patientName = patientNames.length > 0 ? patientNames[0] : 'Не указано';
-    const combinedAnalysis = analyzeMedicalDocument(allExtractedText, patientName, images.length);
-    fullAnalysis += combinedAnalysis;
+    fullAnalysis += `# 👥 Найдено Пациентов: ${patientCount}\n\n`;
+    
+    // STEP 3: Analyze each patient separately
+    let patientNumber = 1;
+    for (const [normalizedName, group] of Object.entries(patientGroups)) {
+        const patientName = group.originalName;
+        const docs = group.documents;
+        
+        fullAnalysis += `\n\n# 👤 ПАЦИЕНТ ${patientNumber}: ${patientName}\n\n`;
+        fullAnalysis += `**Количество документов**: ${docs.length}\n\n`;
+        
+        // List all documents for this patient
+        fullAnalysis += `### 📄 Документы Пациента:\n`;
+        docs.forEach(doc => {
+            fullAnalysis += `- Документ ${doc.number}: ${doc.name}\n`;
+            fullAnalysis += `  - 👨‍⚕️ Врач: ${doc.doctor}\n`;
+            fullAnalysis += `  - 📅 Дата: ${doc.date}\n`;
+            fullAnalysis += `  - 📋 Тип: ${doc.type}\n`;
+        });
+        fullAnalysis += `\n`;
+        
+        // Check Clinical Guidelines for this patient's documents
+        fullAnalysis += `### 📚 Проверка Клинических Рекомендаций:\n\n`;
+        for (const doc of docs) {
+            fullAnalysis += `**Документ ${doc.number}:**\n`;
+            const guidelines = checkClinicalGuidelines(doc.text, doc.type);
+            guidelines.forEach(guideline => {
+                fullAnalysis += `${guideline}\n`;
+            });
+            fullAnalysis += `\n`;
+        }
+        
+        // Comprehensive Analysis for THIS patient
+        const patientText = docs.map(doc => doc.text).join('\n\n');
+        const patientAnalysis = analyzeMedicalDocument(patientText, patientName, docs.length);
+        fullAnalysis += patientAnalysis;
+        
+        fullAnalysis += `\n\n${'='.repeat(80)}\n`;
+        
+        patientNumber++;
+    }
     
     return fullAnalysis;
 }
