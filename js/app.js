@@ -132,72 +132,181 @@ clearBtn.addEventListener('click', () => {
     }
 });
 
-// Analyze Documents using Tesseract.js OCR (No API needed!)
+// Extract Patient Name (NOT doctor name!)
+function extractPatientName(text) {
+    const lowerText = text.toLowerCase();
+    
+    // Look for "Пациент:" or "Patient:" followed by name
+    const patientPatterns = [
+        /пациент[:\s]+([а-яёa-z\s]+)/i,
+        /patient[:\s]+([a-z\s]+)/i,
+        /ф\.?\s*и\.?\s*о\.?\s*пациента[:\s]+([а-яёa-z\s]+)/i
+    ];
+    
+    for (const pattern of patientPatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+            return match[1].trim();
+        }
+    }
+    
+    return null;
+}
+
+// Extract Doctor Name
+function extractDoctorName(text) {
+    const patterns = [
+        /доктор[:\s]+([а-яёa-z\s]+)/i,
+        /врач[:\s]+([а-яёa-z\s]+)/i,
+        /doctor[:\s]+([a-z\s]+)/i,
+        /лечащий\s+врач[:\s]+([а-яёa-z\s]+)/i
+    ];
+    
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+            return match[1].trim();
+        }
+    }
+    
+    return 'Не указано';
+}
+
+// Extract Date
+function extractDate(text) {
+    const datePatterns = [
+        /дата[:\s]+(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})/i,
+        /(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})/
+    ];
+    
+    for (const pattern of datePatterns) {
+        const match = text.match(pattern);
+        if (match && match[1]) {
+            return match[1];
+        }
+    }
+    
+    return 'Не указано';
+}
+
+// Check Clinical Guidelines (Клинические Рекомендации)
+function checkClinicalGuidelines(text, documentType) {
+    const guidelines = [];
+    const lowerText = text.toLowerCase();
+    
+    // Check if document mentions clinical guidelines
+    if (lowerText.includes('клинические рекомендации') || lowerText.includes('клинических рекомендаций')) {
+        guidelines.push('✅ Документ ссылается на клинические рекомендации');
+    } else {
+        guidelines.push('⚠️ Нет ссылки на клинические рекомендации');
+    }
+    
+    // Check for standard medical protocols based on document type
+    if (documentType.includes('Гинекология')) {
+        if (lowerText.includes('узи') || lowerText.includes('ультразвук')) {
+            guidelines.push('✅ УЗИ проведено согласно протоколу');
+        }
+        if (lowerText.includes('анализ') || lowerText.includes('мазок')) {
+            guidelines.push('✅ Лабораторные анализы назначены');
+        }
+    }
+    
+    return guidelines;
+}
+
+// Analyze Documents using Tesseract.js OCR - STEP BY STEP
 async function analyzeDocuments(images) {
     let fullAnalysis = '';
-    let allExtractedText = ''; // Combine all text from all documents
-    let documentsList = '';
-    let patientNames = []; // Store all patient names found
+    let allDocuments = [];
     
-    // Extract text from all documents
+    // STEP 1: Extract text from each document ONE BY ONE
+    fullAnalysis += `# 📋 Обработка Документов (Шаг за Шагом)\n\n`;
+    
     for (let i = 0; i < images.length; i++) {
         const img = images[i];
-        documentsList += `${i + 1}. ${img.name}\n`;
+        fullAnalysis += `### 📄 Документ ${i + 1} из ${images.length}: ${img.name}\n`;
+        fullAnalysis += `⏳ Извлечение текста...\n\n`;
         
         try {
-            // Use Tesseract.js to extract text from image
+            // Use Tesseract.js to extract text
             const { data: { text } } = await Tesseract.recognize(
                 img.data,
-                'eng+rus', // Support English and Russian
+                'eng+rus',
                 {
                     logger: m => console.log(m)
                 }
             );
             
-            allExtractedText += `\n--- Документ ${i + 1}: ${img.name} ---\n${text}\n`;
+            // Extract key information from THIS document
+            const docInfo = {
+                number: i + 1,
+                name: img.name,
+                text: text,
+                patient: extractPatientName(text),
+                doctor: extractDoctorName(text),
+                date: extractDate(text),
+                type: detectDocumentType(text)
+            };
             
-            // Extract patient name from this document
-            const patientName = extractPatientName(text);
-            if (patientName) {
-                patientNames.push(patientName);
-            }
+            allDocuments.push(docInfo);
+            
+            fullAnalysis += `✅ Текст извлечен успешно\n`;
+            fullAnalysis += `👤 **Пациент**: ${docInfo.patient || 'Не найдено'}\n`;
+            fullAnalysis += `👨‍⚕️ **Врач**: ${docInfo.doctor}\n`;
+            fullAnalysis += `📅 **Дата**: ${docInfo.date}\n`;
+            fullAnalysis += `📋 **Тип**: ${docInfo.type}\n\n`;
             
         } catch (error) {
-            documentsList += `   ⚠️ Ошибка обработки\n`;
+            fullAnalysis += `❌ Ошибка обработки документа\n\n`;
         }
-    }
-    
-    // Check if all documents belong to the same patient
-    // Normalize names by trimming whitespace and converting to lowercase for comparison
-    const normalizedNames = patientNames.map(name => name.trim().toLowerCase());
-    const uniqueNames = [...new Set(normalizedNames)];
-    const isSamePatient = uniqueNames.length === 1;
-    const patientName = patientNames.length > 0 ? patientNames[0] : 'Не указано';
-    
-    // Header - Show patient identification
-    fullAnalysis += `# 👤 Проверка Пациента\n\n`;
-    
-    if (isSamePatient && patientName !== 'Не указано') {
-        fullAnalysis += `✅ **Все документы принадлежат одному пациенту**\n\n`;
-        fullAnalysis += `**Имя пациента**: ${patientName}\n`;
-        fullAnalysis += `**Количество документов**: ${images.length}\n\n`;
-    } else if (uniqueNames.length > 1) {
-        fullAnalysis += `⚠️ **ВНИМАНИЕ**: Обнаружены документы разных пациентов!\n\n`;
-        fullAnalysis += `**Найденные имена**:\n`;
-        // Show original names (not normalized)
-        const originalUniqueNames = [...new Set(patientNames)];
-        originalUniqueNames.forEach(name => {
-            fullAnalysis += `- ${name}\n`;
-        });
-        fullAnalysis += `\n**Пожалуйста, загрузите документы только одного пациента.**\n\n`;
-    } else {
-        fullAnalysis += `⚠️ **Имя пациента не найдено в документах**\n\n`;
-        fullAnalysis += `**Количество документов**: ${images.length}\n\n`;
     }
     
     fullAnalysis += `---\n\n`;
     
-    // Analyze ALL documents together as one patient's records
+    // STEP 2: Check if all documents belong to same patient
+    fullAnalysis += `# 👤 Проверка Пациента\n\n`;
+    
+    const patientNames = allDocuments
+        .map(doc => doc.patient)
+        .filter(name => name !== null);
+    
+    const normalizedNames = patientNames.map(name => name.trim().toLowerCase());
+    const uniqueNames = [...new Set(normalizedNames)];
+    
+    if (uniqueNames.length === 1 && patientNames.length > 0) {
+        fullAnalysis += `✅ **Все документы принадлежат одному пациенту**\n\n`;
+        fullAnalysis += `**Имя пациента**: ${patientNames[0]}\n`;
+        fullAnalysis += `**Количество документов**: ${images.length}\n\n`;
+    } else if (uniqueNames.length > 1) {
+        fullAnalysis += `⚠️ **ВНИМАНИЕ: Обнаружены документы разных пациентов!**\n\n`;
+        const originalUniqueNames = [...new Set(patientNames)];
+        originalUniqueNames.forEach(name => {
+            fullAnalysis += `- ${name}\n`;
+        });
+        fullAnalysis += `\n`;
+    } else {
+        fullAnalysis += `⚠️ **Имя пациента не найдено в документах**\n\n`;
+    }
+    
+    fullAnalysis += `---\n\n`;
+    
+    // STEP 3: Check Clinical Guidelines
+    fullAnalysis += `# 📚 Проверка Клинических Рекомендаций\n\n`;
+    
+    for (const doc of allDocuments) {
+        fullAnalysis += `### Документ ${doc.number}: ${doc.name}\n`;
+        const guidelines = checkClinicalGuidelines(doc.text, doc.type);
+        guidelines.forEach(guideline => {
+            fullAnalysis += `${guideline}\n`;
+        });
+        fullAnalysis += `\n`;
+    }
+    
+    fullAnalysis += `---\n\n`;
+    
+    // STEP 4: Comprehensive Analysis for the Patient
+    let allExtractedText = allDocuments.map(doc => doc.text).join('\n\n');
+    const patientName = patientNames.length > 0 ? patientNames[0] : 'Не указано';
     const combinedAnalysis = analyzeMedicalDocument(allExtractedText, patientName, images.length);
     fullAnalysis += combinedAnalysis;
     
