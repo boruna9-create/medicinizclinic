@@ -168,9 +168,11 @@ async function analyzeDocuments(images) {
     }
     
     // Check if all documents belong to the same patient
-    const uniqueNames = [...new Set(patientNames)];
-    const isSamePatient = uniqueNames.length <= 1;
-    const patientName = uniqueNames.length > 0 ? uniqueNames[0] : 'Не указано';
+    // Normalize names by trimming whitespace and converting to lowercase for comparison
+    const normalizedNames = patientNames.map(name => name.trim().toLowerCase());
+    const uniqueNames = [...new Set(normalizedNames)];
+    const isSamePatient = uniqueNames.length === 1;
+    const patientName = patientNames.length > 0 ? patientNames[0] : 'Не указано';
     
     // Header - Show patient identification
     fullAnalysis += `# 👤 Проверка Пациента\n\n`;
@@ -182,7 +184,9 @@ async function analyzeDocuments(images) {
     } else if (uniqueNames.length > 1) {
         fullAnalysis += `⚠️ **ВНИМАНИЕ**: Обнаружены документы разных пациентов!\n\n`;
         fullAnalysis += `**Найденные имена**:\n`;
-        uniqueNames.forEach(name => {
+        // Show original names (not normalized)
+        const originalUniqueNames = [...new Set(patientNames)];
+        originalUniqueNames.forEach(name => {
             fullAnalysis += `- ${name}\n`;
         });
         fullAnalysis += `\n**Пожалуйста, загрузите документы только одного пациента.**\n\n`;
